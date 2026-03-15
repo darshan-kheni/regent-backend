@@ -1,0 +1,34 @@
+# Binaries
+/regent
+/regent-backend
+bin/
+*.exe
+# Binary inside cmd (built artifact)
+cmd/regent/regent
+
+# Environment files (NEVER commit real credentials)
+.env
+.env.*
+!.env.example
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test output
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# Vendor (if used)
+vendor/
+
+# Go build cache
+*.prof

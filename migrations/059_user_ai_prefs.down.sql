@@ -1,0 +1,2 @@
+ALTER TABLE users DROP COLUMN IF EXISTS formality;
+ALTER TABLE users DROP COLUMN IF EXISTS reply_style;

@@ -1,0 +1,3 @@
+DROP FUNCTION IF EXISTS match_embeddings;
+DROP TABLE IF EXISTS embeddings;
+DROP EXTENSION IF EXISTS vector;
