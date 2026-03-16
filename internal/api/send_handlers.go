@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -40,6 +41,7 @@ func (h *SendHandlers) HandleComposeSend(w http.ResponseWriter, r *http.Request)
 		Bcc         []string `json:"bcc_addresses"`
 		Subject     string   `json:"subject"`
 		Body        string   `json:"body"`
+		ScheduledAt *string  `json:"scheduled_at"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
@@ -57,6 +59,54 @@ func (h *SendHandlers) HandleComposeSend(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// Handle scheduled send
+	if req.ScheduledAt != nil && *req.ScheduledAt != "" {
+		scheduledTime, parseErr := time.Parse(time.RFC3339, *req.ScheduledAt)
+		if parseErr != nil {
+			WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "invalid scheduled_at format (expected RFC3339)")
+			return
+		}
+
+		// Store in email_send_log for scheduled delivery
+		conn, connErr := h.pool.Acquire(tc)
+		if connErr != nil {
+			WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "database error")
+			return
+		}
+		defer conn.Release()
+		if setErr := database.SetRLSContext(tc, conn); setErr != nil {
+			WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "database error")
+			return
+		}
+
+		toJSON, _ := json.Marshal(req.To)
+		ccJSON, _ := json.Marshal(req.Cc)
+		bccJSON, _ := json.Marshal(req.Bcc)
+
+		var schedID uuid.UUID
+		err := conn.QueryRow(tc,
+			`INSERT INTO email_send_log (user_id, tenant_id, account_id, to_addresses, cc_addresses, bcc_addresses, subject, body, status, scheduled_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'scheduled', $9)
+			 RETURNING id`,
+			tc.UserID, tc.TenantID, accountID, toJSON, ccJSON, bccJSON, req.Subject, req.Body, scheduledTime,
+		).Scan(&schedID)
+		if err != nil {
+			slog.Error("schedule send failed", "error", err)
+			WriteError(w, r, http.StatusInternalServerError, "SCHEDULE_FAILED", "Failed to schedule email")
+			return
+		}
+
+		slog.Info("email scheduled", "id", schedID, "scheduled_at", scheduledTime)
+		WriteJSON(w, r, http.StatusOK, map[string]interface{}{
+			"status":       "scheduled",
+			"schedule_id":  schedID,
+			"scheduled_at": scheduledTime.Format(time.RFC3339),
+			"message":      "Email scheduled for delivery",
+		})
+		return
+	}
+
+	// Send immediately
 	emailID, err := h.sender.Send(tc, send.SendRequest{
 		AccountID: accountID,
 		To:        req.To,
