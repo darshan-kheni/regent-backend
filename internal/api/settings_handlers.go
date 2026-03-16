@@ -74,9 +74,10 @@ func (h *SettingsHandlers) HandleUpdateProfile(w http.ResponseWriter, r *http.Re
 	}
 
 	var req struct {
-		Name     *string `json:"name"`
-		Timezone *string `json:"timezone"`
-		Language *string `json:"language"`
+		Name      *string `json:"name"`
+		AvatarURL *string `json:"avatar_url"`
+		Timezone  *string `json:"timezone"`
+		Language  *string `json:"language"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteError(w, r, http.StatusBadRequest, "INVALID_REQUEST", "invalid request body")
@@ -91,6 +92,11 @@ func (h *SettingsHandlers) HandleUpdateProfile(w http.ResponseWriter, r *http.Re
 	if req.Name != nil {
 		sets = append(sets, fmt.Sprintf("full_name = $%d", idx))
 		args = append(args, *req.Name)
+		idx++
+	}
+	if req.AvatarURL != nil {
+		sets = append(sets, fmt.Sprintf("avatar_url = $%d", idx))
+		args = append(args, *req.AvatarURL)
 		idx++
 	}
 	if req.Timezone != nil {
@@ -123,7 +129,7 @@ func (h *SettingsHandlers) HandleUpdateProfile(w http.ResponseWriter, r *http.Re
 	}
 
 	args = append(args, tc.UserID)
-	query := fmt.Sprintf("UPDATE users SET %s WHERE id = $%d", strings.Join(sets, ", "), idx)
+	query := fmt.Sprintf("UPDATE users SET %s WHERE id = $%d OR auth_id = $%d", strings.Join(sets, ", "), idx, idx)
 	_, err = conn.Exec(tc, query, args...)
 	if err != nil {
 		slog.Error("update profile", "error", err)
