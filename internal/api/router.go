@@ -58,6 +58,12 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, registry *orchestrator.Se
 
 	// Initialize auth services (only if Supabase is configured)
 	var authHandlers *AuthHandlers
+	slog.Info("auth config check",
+		"supabase_url_set", cfg.Auth.SupabaseURL != "",
+		"service_key_set", cfg.Auth.SupabaseServiceKey != "",
+		"encryption_key_set", cfg.Auth.EncryptionMasterKey != "",
+		"auth_mode", cfg.Auth.Mode,
+	)
 	if cfg.Auth.SupabaseURL != "" && cfg.Auth.SupabaseServiceKey != "" {
 		authCfg := auth.NewConfig(cfg.Auth.SupabaseURL, cfg.Auth.SupabaseAnonKey, cfg.Auth.SupabaseServiceKey)
 		supabaseClient := auth.NewSupabaseClient(authCfg)
@@ -76,6 +82,11 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, registry *orchestrator.Se
 
 		authHandlers = NewAuthHandlers(supabaseClient, sessions, lockout, audit, tokenStore)
 	}
+
+	// OAuth popup flow (no auth — the popup doesn't carry the JWT)
+	oauthPopupH := NewOAuthPopupHandlers(cfg)
+	r.Get("/api/v1/oauth/start", oauthPopupH.HandleOAuthStart)
+	r.Get("/api/v1/oauth/callback", oauthPopupH.HandleOAuthCallback)
 
 	// Gmail push notification webhook (no auth — Google sends these)
 	r.Post("/api/v1/webhooks/gmail", func(w http.ResponseWriter, r *http.Request) {
@@ -123,21 +134,16 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, registry *orchestrator.Se
 	// Public auth routes (no JWT required)
 	if authHandlers != nil {
 		r.Route("/api/v1/auth", func(r chi.Router) {
+			// Public (no auth)
 			r.With(signupRL.Handler).Post("/signup", authHandlers.Signup)
 			r.With(loginRL.Handler).Post("/login", authHandlers.Login)
 			r.Post("/reset-password", authHandlers.ResetPassword)
 			r.Post("/callback", authHandlers.OAuthCallback)
-		})
-	}
 
-	// Protected routes
-	r.Route("/api/v1", func(r chi.Router) {
-		r.Use(authMW)
-		r.Use(mw.NewTenantScope())
-
-		// Auth management (protected)
-		if authHandlers != nil {
-			r.Route("/auth", func(r chi.Router) {
+			// Protected (require JWT) — mounted here to avoid chi route conflict
+			r.Group(func(r chi.Router) {
+				r.Use(authMW)
+				r.Use(mw.NewTenantScope())
 				r.Post("/logout", authHandlers.Logout)
 				r.Post("/refresh", authHandlers.Refresh)
 				r.Get("/sessions", authHandlers.ListSessions)
@@ -150,7 +156,16 @@ func NewRouter(cfg *config.Config, pool *pgxpool.Pool, registry *orchestrator.Se
 				r.Post("/connect/microsoft-calendar", authHandlers.ConnectMicrosoftCalendar)
 				r.Delete("/connect/{provider}", authHandlers.DisconnectProvider)
 			})
-		}
+		})
+	}
+
+	// Protected routes
+	r.Route("/api/v1", func(r chi.Router) {
+		r.Use(authMW)
+		r.Use(mw.NewTenantScope())
+
+		// Auth management routes are registered in the public auth group above
+		// with their own auth middleware to avoid chi route conflicts.
 
 		r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
 			WriteJSON(w, r, http.StatusOK, map[string]string{"message": "pong"})

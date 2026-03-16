@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -59,19 +60,25 @@ func (h *SentHandlers) HandleListSent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, account_id, COALESCE(message_id, ''), thread_id,
-	                 COALESCE(from_address, ''), COALESCE(from_name, ''),
-	                 COALESCE(subject, ''), COALESCE(body_text, ''),
-	                 COALESCE(has_attachments, false),
-	                 received_at, created_at
-	          FROM emails
-	          WHERE user_id = $1 AND direction = 'outbound'`
+	query := `SELECT e.id, e.account_id, COALESCE(e.message_id, ''), e.thread_id,
+	                 COALESCE(e.from_address, ''), COALESCE(e.from_name, ''),
+	                 COALESCE(e.to_addresses, '[]'::jsonb),
+	                 COALESCE(e.subject, ''), COALESCE(e.body_text, ''),
+	                 COALESCE(e.has_attachments, false), COALESCE(e.is_read, false),
+	                 EXISTS(
+	                   SELECT 1 FROM draft_replies dr
+	                   JOIN emails e2 ON dr.email_id = e2.id
+	                   WHERE e2.thread_id = e.thread_id AND dr.status IN ('approved', 'sent')
+	                 ) as ai_drafted,
+	                 e.received_at, e.created_at
+	          FROM emails e
+	          WHERE e.user_id = $1 AND e.direction = 'outbound'`
 	args := []interface{}{tc.UserID}
 	argN := 2
 
 	if accountID != "" {
 		if _, err := uuid.Parse(accountID); err == nil {
-			query += ` AND account_id = $` + strconv.Itoa(argN)
+			query += ` AND e.account_id = $` + strconv.Itoa(argN)
 			args = append(args, accountID)
 			argN++
 		}
@@ -95,9 +102,12 @@ func (h *SentHandlers) HandleListSent(w http.ResponseWriter, r *http.Request) {
 		ThreadID       *uuid.UUID `json:"thread_id"`
 		FromAddress    string     `json:"from_address"`
 		FromName       string     `json:"from_name"`
+		ToAddresses    []string   `json:"to_addresses"`
 		Subject        string     `json:"subject"`
 		BodyText       string     `json:"body_text"`
 		HasAttachments bool       `json:"has_attachments"`
+		IsRead         bool       `json:"is_read"`
+		AiDrafted      bool       `json:"ai_drafted"`
 		ReceivedAt     string     `json:"received_at"`
 		CreatedAt      string     `json:"created_at"`
 	}
@@ -106,9 +116,10 @@ func (h *SentHandlers) HandleListSent(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var e sentResponse
 		var receivedAt, createdAt time.Time
+		var toJSON []byte
 		if err := rows.Scan(&e.ID, &e.AccountID, &e.MessageID, &e.ThreadID,
-			&e.FromAddress, &e.FromName,
-			&e.Subject, &e.BodyText, &e.HasAttachments,
+			&e.FromAddress, &e.FromName, &toJSON,
+			&e.Subject, &e.BodyText, &e.HasAttachments, &e.IsRead, &e.AiDrafted,
 			&receivedAt, &createdAt); err != nil {
 			slog.Error("scan sent email", "error", err)
 			continue
@@ -117,6 +128,10 @@ func (h *SentHandlers) HandleListSent(w http.ResponseWriter, r *http.Request) {
 		e.CreatedAt = createdAt.Format(time.RFC3339)
 		e.Subject = decodeMIME(e.Subject)
 		e.FromName = decodeMIME(e.FromName)
+		_ = json.Unmarshal(toJSON, &e.ToAddresses)
+		if e.ToAddresses == nil {
+			e.ToAddresses = []string{}
+		}
 		emails = append(emails, e)
 	}
 
@@ -161,6 +176,8 @@ func (h *SentHandlers) HandleGetSentEmail(w http.ResponseWriter, r *http.Request
 		ThreadID       *uuid.UUID `json:"thread_id"`
 		FromAddress    string     `json:"from_address"`
 		FromName       string     `json:"from_name"`
+		ToAddresses    []string   `json:"to_addresses"`
+		CcAddresses    []string   `json:"cc_addresses"`
 		Subject        string     `json:"subject"`
 		BodyText       string     `json:"body_text"`
 		BodyHTML       *string    `json:"body_html"`
@@ -171,9 +188,11 @@ func (h *SentHandlers) HandleGetSentEmail(w http.ResponseWriter, r *http.Request
 
 	var e sentDetailResponse
 	var receivedAt, createdAt time.Time
+	var toJSON, ccJSON []byte
 	err = conn.QueryRow(tc,
 		`SELECT id, account_id, COALESCE(message_id, ''), thread_id,
 		        COALESCE(from_address, ''), COALESCE(from_name, ''),
+		        COALESCE(to_addresses, '[]'::jsonb), COALESCE(cc_addresses, '[]'::jsonb),
 		        COALESCE(subject, ''), COALESCE(body_text, ''), body_html,
 		        COALESCE(has_attachments, false),
 		        received_at, created_at
@@ -181,7 +200,7 @@ func (h *SentHandlers) HandleGetSentEmail(w http.ResponseWriter, r *http.Request
 		 WHERE id = $1 AND user_id = $2 AND direction = 'outbound'`,
 		emailID, tc.UserID).Scan(
 		&e.ID, &e.AccountID, &e.MessageID, &e.ThreadID,
-		&e.FromAddress, &e.FromName,
+		&e.FromAddress, &e.FromName, &toJSON, &ccJSON,
 		&e.Subject, &e.BodyText, &e.BodyHTML,
 		&e.HasAttachments,
 		&receivedAt, &createdAt,
@@ -195,6 +214,14 @@ func (h *SentHandlers) HandleGetSentEmail(w http.ResponseWriter, r *http.Request
 	e.CreatedAt = createdAt.Format(time.RFC3339)
 	e.Subject = decodeMIME(e.Subject)
 	e.FromName = decodeMIME(e.FromName)
+	_ = json.Unmarshal(toJSON, &e.ToAddresses)
+	_ = json.Unmarshal(ccJSON, &e.CcAddresses)
+	if e.ToAddresses == nil {
+		e.ToAddresses = []string{}
+	}
+	if e.CcAddresses == nil {
+		e.CcAddresses = []string{}
+	}
 
 	WriteJSON(w, r, http.StatusOK, e)
 }

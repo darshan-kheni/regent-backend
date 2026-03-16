@@ -9,12 +9,20 @@ const (
 	MicrosoftOfflineScope = "offline_access"
 )
 
-// ValidateMicrosoftScopes checks that the Outlook IMAP scope was granted.
+// ValidateMicrosoftScopes checks that sufficient email access scopes were granted.
 func ValidateMicrosoftScopes(grantedScopes []string) error {
+	accepted := map[string]bool{
+		MicrosoftIMAPScope:      true,
+		"IMAP.AccessAsUser.All": true,
+		"Mail.Read":             true,
+		"Mail.Send":             true,
+		"mail.read":             true,
+		"mail.send":             true,
+	}
 	for _, s := range grantedScopes {
-		if s == MicrosoftIMAPScope {
+		if accepted[s] {
 			return nil
 		}
 	}
-	return fmt.Errorf("Outlook IMAP scope not granted: required %s", MicrosoftIMAPScope)
+	return fmt.Errorf("insufficient email scopes: need Mail.Read, Mail.Send, or IMAP access")
 }

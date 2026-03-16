@@ -48,7 +48,7 @@ func (h *SettingsHandlers) HandleGetProfile(w http.ResponseWriter, r *http.Reque
 	var avatarURL *string
 	err = conn.QueryRow(tc,
 		`SELECT COALESCE(full_name, ''), email, avatar_url, COALESCE(timezone, 'UTC'), COALESCE(language, 'en')
-		 FROM users WHERE id = $1`, tc.UserID).Scan(&name, &email, &avatarURL, &timezone, &language)
+		 FROM users WHERE id = $1 OR auth_id = $1`, tc.UserID).Scan(&name, &email, &avatarURL, &timezone, &language)
 	if err != nil {
 		slog.Error("query profile", "error", err)
 		WriteError(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to load profile")

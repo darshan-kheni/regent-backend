@@ -21,6 +21,7 @@ type Config struct {
 	RateLimit     RateLimitConfig
 	Email         EmailConfig
 	Gmail         GmailConfig
+	Microsoft     MicrosoftConfig
 	Orchestrator  OrchestratorCfg
 	SMTP          SMTPConfig
 	AI            AIConfig
@@ -95,6 +96,12 @@ type GmailConfig struct {
 	ClientSecret  string // GOOGLE_CLIENT_SECRET
 	PubSubTopic   string // GMAIL_PUBSUB_TOPIC
 	PubSubProject string // GMAIL_PUBSUB_PROJECT
+}
+
+// MicrosoftConfig holds Microsoft OAuth settings.
+type MicrosoftConfig struct {
+	ClientID     string // MICROSOFT_CLIENT_ID
+	ClientSecret string // MICROSOFT_CLIENT_SECRET
 }
 
 // OrchestratorCfg holds settings for the always-on service orchestrator.
@@ -199,6 +206,7 @@ func Load() *Config {
 		RateLimit:     loadRateLimitConfig(),
 		Email:         loadEmailConfig(),
 		Gmail:         loadGmailConfig(),
+		Microsoft:     loadMicrosoftConfig(),
 		Orchestrator:  loadOrchestratorConfig(),
 		SMTP:          loadSMTPConfig(),
 		AI:            loadAIConfig(),
@@ -314,6 +322,13 @@ func loadGmailConfig() GmailConfig {
 		ClientSecret:  os.Getenv("GOOGLE_CLIENT_SECRET"),
 		PubSubTopic:   os.Getenv("GMAIL_PUBSUB_TOPIC"),
 		PubSubProject: os.Getenv("GMAIL_PUBSUB_PROJECT"),
+	}
+}
+
+func loadMicrosoftConfig() MicrosoftConfig {
+	return MicrosoftConfig{
+		ClientID:     os.Getenv("MICROSOFT_CLIENT_ID"),
+		ClientSecret: os.Getenv("MICROSOFT_CLIENT_SECRET"),
 	}
 }
 

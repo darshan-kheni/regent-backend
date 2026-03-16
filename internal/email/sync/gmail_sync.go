@@ -40,6 +40,12 @@ func NewGmailSyncer(pool *pgxpool.Pool, thread *emailpkg.ThreadService, dedup *e
 // Steps: ListMessages with after: query (30 days) -> for each message ID:
 // GetRawMessage -> MIME parse -> assign thread -> dedup store -> update progress.
 func (s *GmailSyncer) Sync(ctx database.TenantContext, account *models.UserAccount, svc *gmail.Service, cursorID uuid.UUID) error {
+	// Check if this is a brand new account (first sync).
+	cursor, err := s.progress.GetOrCreateCursor(ctx, account.ID, "gmail")
+	if err != nil {
+		return fmt.Errorf("getting gmail cursor: %w", err)
+	}
+
 	// Build query for last 30 days.
 	since := sinceDate()
 	query := fmt.Sprintf("after:%s", since.Format("2006/01/02"))
@@ -56,6 +62,22 @@ func (s *GmailSyncer) Sync(ctx database.TenantContext, account *models.UserAccou
 			"account_id", account.ID,
 			"since", since.Format("2006/01/02"),
 		)
+		if err := s.progress.MarkCompleted(ctx, cursorID); err != nil {
+			return fmt.Errorf("marking completed: %w", err)
+		}
+		return nil
+	}
+
+	// NEW ACCOUNT: If last_uid is nil (first sync ever), skip past emails.
+	// Set the cursor to the current message count so only future emails are fetched.
+	if cursor.LastUID == nil && totalMessages > 0 {
+		slog.Info("new Gmail account: skipping past emails, setting baseline",
+			"account_id", account.ID,
+			"existing_emails", totalMessages,
+		)
+		if err := s.progress.UpdateLastUID(ctx, cursorID, int64(totalMessages)); err != nil {
+			return fmt.Errorf("setting Gmail baseline: %w", err)
+		}
 		if err := s.progress.MarkCompleted(ctx, cursorID); err != nil {
 			return fmt.Errorf("marking completed: %w", err)
 		}

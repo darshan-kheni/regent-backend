@@ -149,3 +149,29 @@ func (s *OAuthTokenStore) DeleteTokens(ctx database.TenantContext, userID uuid.U
 	)
 	return err
 }
+
+// EnsureEmailAccount creates a user_accounts entry for an OAuth-connected email if it doesn't exist.
+func (s *OAuthTokenStore) EnsureEmailAccount(ctx database.TenantContext, userID uuid.UUID, provider, email string) error {
+	conn, err := s.pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("acquiring connection: %w", err)
+	}
+	defer conn.Release()
+
+	if err := database.SetRLSContext(ctx, conn); err != nil {
+		return fmt.Errorf("setting RLS: %w", err)
+	}
+
+	_, err = conn.Exec(ctx,
+		`INSERT INTO user_accounts (user_id, tenant_id, provider, email_address, display_name, sync_status)
+		 VALUES ($1, $2, $3, $4, $5, 'active')
+		 ON CONFLICT (user_id, email_address) DO UPDATE SET
+		   provider = EXCLUDED.provider,
+		   sync_status = 'active'`,
+		userID, ctx.TenantID, provider, email, email,
+	)
+	if err != nil {
+		return fmt.Errorf("ensuring email account: %w", err)
+	}
+	return nil
+}

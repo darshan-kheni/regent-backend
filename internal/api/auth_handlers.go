@@ -376,16 +376,28 @@ func (h *AuthHandlers) connectProvider(w http.ResponseWriter, r *http.Request, p
 		}
 	}
 
-	// Store encrypted tokens
-	err := h.tokenStore.StoreTokens(tc, user.ID, provider,
+	// Resolve users.id from auth_id (JWT sub != users.id for some users)
+	actualUserID := tc.UserID // This is the auth user ID from JWT
+
+	// Store encrypted tokens using the auth user ID
+	// The token store needs to handle the FK by using the correct users.id
+	err := h.tokenStore.StoreTokens(tc, actualUserID, provider,
 		req.ProviderToken, req.ProviderRefreshToken,
-		req.Scopes, time.Now().Add(time.Hour), // Default 1hr expiry
-		user.ID.String(), req.ProviderEmail,
+		req.Scopes, time.Now().Add(time.Hour),
+		actualUserID.String(), req.ProviderEmail,
 	)
 	if err != nil {
 		slog.Error("store tokens failed", "error", err, "provider", provider)
 		WriteError(w, r, http.StatusInternalServerError, "STORE_FAILED", "failed to store provider tokens")
 		return
+	}
+
+	// Create email account entry so the orchestrator picks it up for syncing
+	if req.ProviderEmail != "" {
+		if accErr := h.tokenStore.EnsureEmailAccount(tc, user.ID, provider, req.ProviderEmail); accErr != nil {
+			slog.Warn("failed to create email account for OAuth", "error", accErr, "provider", provider)
+			// Non-fatal — tokens are stored, account can be created manually
+		}
 	}
 
 	h.audit.Log(r.Context(), r, auth.EventOAuthConnect, &user.ID, &tc.TenantID, provider, true, nil)

@@ -150,6 +150,7 @@ func (h *DashboardHandlers) HandleDashboardStats(w http.ResponseWriter, r *http.
 		FromAddress string `json:"from_address"`
 		ReceivedAt  string `json:"received_at"`
 		Priority    int    `json:"priority"`
+		Category    string `json:"category"`
 		AccountID   string `json:"account_id"`
 		Snippet     string `json:"snippet"`
 	}
@@ -158,16 +159,18 @@ func (h *DashboardHandlers) HandleDashboardStats(w http.ResponseWriter, r *http.
 	attRows, attErr := conn.Query(tc,
 		`SELECT e.id, COALESCE(e.subject, ''), COALESCE(e.from_name, ''),
 		        COALESCE(e.from_address, ''), e.received_at,
-		        COALESCE(ec.priority_score, 50), e.account_id,
-		        LEFT(COALESCE(e.body_text, ''), 120)
+		        COALESCE(ec.priority_score, 50), COALESCE(LOWER(ec.category), ''), e.account_id,
+		        COALESCE(es.headline, LEFT(COALESCE(e.body_text, ''), 120))
 		 FROM emails e
 		 LEFT JOIN email_categories ec ON ec.email_id = e.id
+		 LEFT JOIN email_summaries es ON es.email_id = e.id
 		 LEFT JOIN draft_replies dr ON dr.email_id = e.id
 		 WHERE e.user_id = $1
 		   AND e.direction = 'inbound'
 		   AND e.received_at >= $2
 		   AND dr.id IS NULL
-		   AND COALESCE(ec.priority_score, 50) >= 60
+		   AND COALESCE(ec.priority_score, 50) >= 75
+		   AND COALESCE(LOWER(ec.category), '') NOT IN ('promotions','newsletters','spam','updates','shopping','social','events','subscriptions','advertising')
 		 ORDER BY COALESCE(ec.priority_score, 50) DESC, e.received_at DESC
 		 LIMIT 10`, tc.UserID, weekAgo)
 	if attErr == nil {
@@ -176,7 +179,7 @@ func (h *DashboardHandlers) HandleDashboardStats(w http.ResponseWriter, r *http.
 			var a attentionEmail
 			var receivedAt time.Time
 			if attRows.Scan(&a.ID, &a.Subject, &a.FromName, &a.FromAddress,
-				&receivedAt, &a.Priority, &a.AccountID, &a.Snippet) == nil {
+				&receivedAt, &a.Priority, &a.Category, &a.AccountID, &a.Snippet) == nil {
 				a.ReceivedAt = receivedAt.Format(time.RFC3339)
 				a.Subject = decodeMIME(a.Subject)
 				a.FromName = decodeMIME(a.FromName)

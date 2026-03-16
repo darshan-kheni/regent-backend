@@ -75,6 +75,29 @@ func (s *IMAPSyncer) Sync(ctx database.TenantContext, account *models.UserAccoun
 		return fmt.Errorf("getting cursor: %w", err)
 	}
 
+	// NEW ACCOUNT: If last_uid is nil (first sync ever), skip past emails.
+	// Set the cursor to the highest current UID so only future emails are fetched.
+	if cursor.LastUID == nil && len(allUIDs) > 0 {
+		maxUID := allUIDs[0]
+		for _, uid := range allUIDs {
+			if uid > maxUID {
+				maxUID = uid
+			}
+		}
+		slog.Info("new account: skipping past emails, setting baseline",
+			"account_id", account.ID,
+			"existing_emails", len(allUIDs),
+			"baseline_uid", maxUID,
+		)
+		if err := s.progress.UpdateLastUID(ctx, cursorID, int64(maxUID)); err != nil {
+			return fmt.Errorf("setting baseline UID: %w", err)
+		}
+		if err := s.progress.MarkCompleted(ctx, cursorID); err != nil {
+			return fmt.Errorf("marking completed: %w", err)
+		}
+		return nil
+	}
+
 	// Filter UIDs above last_uid for resume support.
 	uids := FilterAboveUID(allUIDs, cursor.LastUID)
 
